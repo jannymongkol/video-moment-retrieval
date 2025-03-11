@@ -33,7 +33,7 @@
 4. **Download the necessary data and place it in the appropriate directories:**
    - Ensure the data is structured as described below.
 
-## Expected Data Folder Structure
+## Expected Data and Prediction Folder Structure
 
 ```
 video-moment-retrieval/
@@ -41,7 +41,10 @@ video-moment-retrieval/
     ├── vu17_charades/
     ├── Charades-CD/
     ├── Charades_v1_480/
-    └── Charades_v1_480_16/
+    ├── Charades_v1_480_16/
+    ├── clip_text_feature_vector/
+    └── clip_video_feature_vector/
+└── predictions/
 ```
 
 - **data/vu17_charades/**: 
@@ -55,5 +58,14 @@ video-moment-retrieval/
 - **data/Charades_v1_480_16/**: 
     - Contains the videos in Charades dataset, standardized to 16 fps
     - Run ./generate_16fps.sh, to generate this folder
+- **data/clip_text_feature_vector/**: 
+    - Clip embeddings for all text queries. 
+    - Use setup/generate_text_vectors.py to generate this (with all 4 data files in Charades-CD)
+- **data/clip_video_feature_vector/**: 
+    - Clip embeddings for each frame of each video. 
+    - Use setup/generate_video_vectors.py to generate this (with all 4 data files in Charades-CD)
+- **predictions/**:
+    - Keep this folder in the root directly, for storing all prediction results. Used by evaluation methods.
+    - To generate baseline predictions, run baseline/baseline_prediction.py
 
 Make sure to follow this structure to ensure the code runs correctly.
