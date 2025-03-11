@@ -46,7 +46,7 @@ def dr1_IoUm(gt_interval_path, prediction_interval_path, min_IoU=0.5):
         total_queries += gt_intervals.shape[0]
         r1_IoUm_res = r1_IoUm_sum(gt_intervals, pred_intervals, min_IoU)
         
-        vid_size = gt_data[vid_id]['video_duration'] * gt_data[vid_id]['decode_fps']
+        vid_size = max(gt_data[vid_id]['video_duration'] * gt_data[vid_id]['decode_fps'], np.max(gt_intervals[:,1]))
         alpha_s = np.abs(gt_intervals[:, 0] - pred_intervals[:, 0])/vid_size
         alpha_e = np.abs(gt_intervals[:, 1] - pred_intervals[:, 1])/vid_size
         
