@@ -2,7 +2,7 @@ import json
 import sys
 import numpy as np
 
-def pred(video_id, pred_clip_length=96):
+def pred(video_id, pred_clip_length=128):
 
     # video embeddings shape: (num_frames, embedding_size)
     video_embeddings = np.load(f'data/clip_video_feature_vector/{video_id}.npy')

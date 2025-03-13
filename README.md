@@ -34,7 +34,7 @@
    - Ensure the data is structured as described below.
 
 ## Expected Data and Prediction Folder Structure
-
+Both Data and Prediction Folders are git-ignored, but are required for running this project.
 ```
 video-moment-retrieval/
 └── data/
