@@ -1,7 +1,85 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from transformers import BertTokenizer, BertModel
+
+def create_target_mask(start_frames, end_frames, num_frames, device):
+    """
+    Create binary target masks from start and end frame indices
+    
+    Args:
+        start_frames: Tensor of start frame indices (batch_size,)
+        end_frames: Tensor of end frame indices (batch_size,)
+        num_frames: Number of frames in prediction
+        device: Device to create tensor on
+        
+    Returns:
+        Binary mask of shape (batch_size, num_frames)
+    """
+    batch_size = start_frames.size(0)
+    masks = torch.zeros(batch_size, num_frames, device=device)
+    
+    for i in range(batch_size):
+        start = start_frames[i]
+        end = end_frames[i]
+        
+        # Create mask with 1s from start to end (inclusive)
+        masks[i, start:end+1] = 1.0
+        
+    return masks
+
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1e-3, reduction='mean'):
+        """
+        Dice Loss for binary classification with logits
+        
+        Args:
+            smooth: Smoothing term to avoid division by zero
+            reduction: 'mean', 'sum', or 'none'
+        """
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+        self.reduction = reduction
+        
+    def forward(self, logits, start_frames, end_frames):
+        """
+        Calculate dice loss
+        
+        Args:
+            logits: Model predictions as logits (batch_size, num_frames)
+            start_frames: Start frame indices (batch_size,)
+            end_frames: End frame indices (batch_size,)
+            
+        Returns:
+            Dice loss value
+        """
+        # Convert logits to probabilities
+        probs = torch.sigmoid(logits)
+        
+        # Create target masks
+        num_frames = logits.size(1)
+        targets = create_target_mask(start_frames, end_frames, num_frames, logits.device)
+        
+        # Calculate dice coefficient per sample
+        batch_size = logits.size(0)
+        dice_scores = torch.zeros(batch_size, device=logits.device)
+        
+        for i in range(batch_size):
+            intersection = torch.sum(probs[i] * targets[i])
+            union = torch.sum(probs[i]) + torch.sum(targets[i])
+            dice_scores[i] = (2.0 * intersection + self.smooth) / (union + self.smooth)
+        
+        # Convert to loss (1 - dice)
+        loss = 1.0 - dice_scores # (batch_size,)
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:  # 'none'
+            return loss
 
 class MomentBERT(nn.Module):
     def __init__(self, clip_dim=512, hidden_dim=768, max_video_len=384, bert_trainable=False, prediction_head='in_out'):
