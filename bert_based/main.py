@@ -1,6 +1,6 @@
 import torch
 
-from bert_based.model import MomentBERT
+from bert_based.model import VideoTextBERTWithPredictionHead
 
 def train(model, dataloader, loss_fn, optimizer, device):
     """
