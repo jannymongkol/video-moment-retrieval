@@ -2,6 +2,8 @@ import torch
 
 import os
 import sys
+from tqdm import tqdm
+from datetime import datetime
 
 # Add the parent directory to the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -25,10 +27,13 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
     total_loss = 0
     num_batches = len(dataset)
 
-    for idx, data in enumerate(dataset):
-
+    # Create progress bar
+    pbar = tqdm(enumerate(dataset), total=num_batches, desc='Training', leave=True)
+    
+    for idx, data in pbar:
         queries = data['sentences']  # List of sentences, length B
         video_clip_embeddings = torch.from_numpy(data['embedding']).to(device)  # Video embeddings (num_frames, clip_dim)
+
         framestamps = data['framestamps']
 
         optimizer.zero_grad()
@@ -39,18 +44,18 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
         # gt: [[start, end], [start, end]]
         # Compute loss
         loss = loss_fn(result, framestamps)
-
-        # Backprop + optimize
         loss.backward()
         optimizer.step()
 
-        # Logging
         total_loss += loss.item()
 
         if (idx + 1) % 10 == 0 or (idx + 1) == num_batches:
-            print(f"Batch {idx+1}/{num_batches} | "
-                  f"Loss: {loss.item():.4f} | ")
-            
+            # Update progress bar
+            pbar.set_postfix({
+                'batch': f"{idx+1}/{num_batches}",
+                'loss': f'{loss.item():.4f}'}
+            )
+
     # Epoch-level summary
     avg_loss = total_loss / num_batches
     
@@ -76,13 +81,20 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
 
 
 if __name__ == "__main__":
+    # Setup device
     if torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
+    print(device)
+    exit(0)
     
+    # Create checkpoint directory
+    os.makedirs("checkpoints", exist_ok=True)
+    
+    # Model setup
     model = MomentBERT().to(device)
     train_dataset = MomentDataset(
         dataset_json_file="data/Charades-CD/charades_train.json",
@@ -94,17 +106,51 @@ if __name__ == "__main__":
         dataset_json_file="data/Charades-CD/charades_val.json",
         embedding_dir="data/clip_video_feature_vector",
         frame_rate=4
-    )
-    
+    )    
     num_epochs = 10
-    
+
     loss_fn = DiceLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     
-    for i in range(num_epochs):
-        print(f"\nEpoch {i+1}/{num_epochs}")
+    # Training tracking
+    best_loss = float('inf')
+    best_epoch = -1
+    start_time = datetime.now()
+    
+    # Training loop with progress bar for epochs
+    for epoch in tqdm(range(num_epochs), desc='Epochs', position=0):
         # Assuming loss_fn and optimizer are defined
         avg_train_loss, avg_val_loss = train(model, train_dataset, loss_fn, optimizer, device, val_dataset)
         
         print(f"Average Train Loss: {avg_train_loss:.4f}")
         print(f"Average Validation Loss: {avg_val_loss:.4f}")
+        # Save checkpoint
+        checkpoint = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'train_loss': avg_train_loss,
+            'val_loss': avg_val_loss,
+            'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S")
+        }
+        
+        # Save current epoch
+        torch.save(checkpoint, f"checkpoints/moment_bert_epoch_{epoch+1}.pt")
+        
+        # Update best model if needed
+        if avg_val_loss < best_loss:
+            best_loss = avg_val_loss
+            best_epoch = epoch + 1
+            torch.save(checkpoint, "checkpoints/moment_bert_best.pt")
+    
+    end_time = datetime.now()
+    training_time = end_time - start_time
+    
+    # Print final summary
+    print("\n" + "="*50)
+    print("Training Complete!")
+    print(f"Total training time: {training_time}")
+    print(f"Best model saved at epoch {best_epoch} with loss: {best_loss:.4f}")
+    print(f"Best model checkpoint: checkpoints/moment_bert_best.pt")
+    print(f"Final model checkpoint: checkpoints/moment_bert_epoch_{num_epochs}.pt")
+    print("="*50)
