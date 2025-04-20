@@ -105,6 +105,8 @@ class MomentBERT(nn.Module):
         if prediction_head == 'start_end':
             self.start_head = nn.Linear(hidden_dim, 1)
             self.end_head = nn.Linear(hidden_dim, 1)
+        
+        self.prediction_head = prediction_head
 
     def forward(self, queries, video_clip_embeddings):
         """
@@ -128,7 +130,6 @@ class MomentBERT(nn.Module):
         device = video_clip_embeddings.device
 
         # Use BERT tokenizer to process queries
-        self.tokenizer()
         encodings = self.tokenizer(
             queries,
             padding=True,
@@ -146,7 +147,7 @@ class MomentBERT(nn.Module):
         pos_ids = torch.arange(N_frames, device=device).unsqueeze(0).expand(B, N_frames)  # (B, N_frames)
         video_pos = self.video_pos_embed(pos_ids)                # (B, N_frames, bert_hidden_dim)
         video_embeds = video_proj + video_pos                    # (B, N_frames, bert_hidden_dim)
-
+        
         # [SEP] token embedding
         sep_token_id = 102  # for BERT
         sep_token = self.bert.embeddings.word_embeddings(
@@ -155,7 +156,6 @@ class MomentBERT(nn.Module):
 
         # Concatenate: [text tokens] + [SEP] + [video tokens] + [SEP]
         full_input = torch.cat([text_embeds, sep_token, video_embeds, sep_token], dim=1)  # (M, T + N_frames + 2, bert_hidden_dim)
-
         # Attention mask
         full_attention = torch.cat([
             attention_mask,                             # (M, T)
@@ -163,14 +163,14 @@ class MomentBERT(nn.Module):
             torch.ones((B, N_frames), device=device),          # video
             torch.ones((B, 1), device=device)           # final SEP
         ], dim=1)  # (B, T + N_frames + 2)
-
+        
         # Token type ids
         token_type_ids = torch.cat([
-            torch.zeros((B, input_ids.size(1)), device=device),
-            torch.zeros((B, 1), device=device),
-            torch.ones((B, N_frames), device=device),
-            torch.ones((B, 1), device=device)
-        ], dim=1)  # (B, T + N_frames + 2)
+            torch.zeros((B, input_ids.size(1)), device=device, dtype=torch.long),
+            torch.zeros((B, 1), device=device, dtype=torch.long),
+            torch.ones((B, N_frames), device=device, dtype=torch.long),
+            torch.ones((B, 1), device=device, dtype=torch.long)
+        ], dim=1, )  # (B, T + N_frames + 2)
 
         # Forward through frozen BERT
         outputs = self.bert(
@@ -178,7 +178,7 @@ class MomentBERT(nn.Module):
             attention_mask=full_attention,
             token_type_ids=token_type_ids
         )
-
+        
         contextual = outputs.last_hidden_state  # (B, T + N_frames + 2, hidden)
         video_contextual = contextual[:, input_ids.size(1) + 1 : -1, :]  # (B, N_frames, hidden)
 

@@ -1,10 +1,17 @@
 import torch
 
+import os
+import sys
+
+# Add the parent directory to the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from bert_based.model import MomentBERT
 from bert_based.data_loader import MomentDataset
 from bert_based.model import DiceLoss
 
-def train(model, dataset, loss_fn, optimizer, device):
+
+def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
     """
     Training loop for video moment retrieval.
 
@@ -21,7 +28,7 @@ def train(model, dataset, loss_fn, optimizer, device):
     for idx, data in enumerate(dataset):
 
         queries = data['sentences']  # List of sentences, length B
-        video_clip_embeddings = data['embedding'].to(device)  # Video embeddings (num_frames, clip_dim)
+        video_clip_embeddings = torch.from_numpy(data['embedding']).to(device)  # Video embeddings (num_frames, clip_dim)
         framestamps = data['framestamps']
 
         optimizer.zero_grad()
@@ -46,7 +53,26 @@ def train(model, dataset, loss_fn, optimizer, device):
             
     # Epoch-level summary
     avg_loss = total_loss / num_batches
-    return avg_loss
+    
+    if val_dataset is not None:
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for idx, data in enumerate(val_dataset):
+                queries = data['sentences']
+                video_clip_embeddings = torch.from_numpy(data['embedding']).to(device)
+                framestamps = data['framestamps']
+
+                result = model.forward(queries, video_clip_embeddings)
+                loss = loss_fn(result, framestamps)
+                val_loss += loss.item()
+
+        avg_val_loss = val_loss / len(val_dataset)
+        print(f"Validation Loss: {avg_val_loss:.4f}")
+    
+        return avg_loss, avg_val_loss
+    else:
+        return avg_loss
 
 
 if __name__ == "__main__":
@@ -59,7 +85,13 @@ if __name__ == "__main__":
     
     model = MomentBERT().to(device)
     train_dataset = MomentDataset(
-        json_file="data/Charades-CD/charades_train.json",
+        dataset_json_file="data/Charades-CD/charades_train.json",
+        embedding_dir="data/clip_video_feature_vector",
+        frame_rate=4
+    )
+    
+    val_dataset = MomentDataset(
+        dataset_json_file="data/Charades-CD/charades_val.json",
         embedding_dir="data/clip_video_feature_vector",
         frame_rate=4
     )
@@ -72,10 +104,7 @@ if __name__ == "__main__":
     for i in range(num_epochs):
         print(f"\nEpoch {i+1}/{num_epochs}")
         # Assuming loss_fn and optimizer are defined
-        avg_loss = train(model, train_dataset, loss_fn, optimizer, device)
-
-    
-
-    # for epoch in range(num_epochs):
-    #     print(f"\nEpoch {epoch+1}/{num_epochs}")
-    #     train(model, dataloader, loss_fn, optimizer, device)
+        avg_train_loss, avg_val_loss = train(model, train_dataset, loss_fn, optimizer, device, val_dataset)
+        
+        print(f"Average Train Loss: {avg_train_loss:.4f}")
+        print(f"Average Validation Loss: {avg_val_loss:.4f}")
