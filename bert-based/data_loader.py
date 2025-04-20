@@ -1,100 +1,132 @@
-import torch
+import json
+import numpy as np
+import os
 from torch.utils.data import Dataset, DataLoader
-from transformers import BertTokenizer
 
-class MomentDataset(torch.utils.data.Dataset):
-    def __init__(self, video_embeddings_list, queries_list, start_indices_list, end_indices_list):
+class MomentDataset(Dataset):
+    """
+    Dataset for Charades video data with video embeddings
+    """
+    def __init__(self, dataset_json_file, embedding_dir, frame_rate=16):
         """
-        video_embeddings_list: list of torch.Tensor (N_i, clip_dim) for each video
-        queries_list: list of lists of str — each sublist contains queries for that video
-        start_indices_list: list of lists of int — start frame index for each query
-        end_indices_list: list of lists of int — end frame index for each query
+        Args:
+            json_file (str): Path to the JSON file with charades data
+            embedding_dir (str): Directory containing the video embeddings
         """
-        self.video_embeddings_list = video_embeddings_list
-        self.queries_list = queries_list
-        self.start_indices_list = start_indices_list
-        self.end_indices_list = end_indices_list
+        assert(frame_rate <= 16)
+        assert(16 % frame_rate == 0)
+        self.frame_rate = frame_rate
 
+        # Load the dataset
+        with open(dataset_json_file, 'r') as f:
+            self.data = json.load(f)
+        
+        # Filter video IDs to only include those with existing embedding files
+        self.video_ids = []
+        for video_id in self.data.keys():
+            embedding_path = os.path.join(embedding_dir, f"{video_id}.npy")
+            if os.path.exists(embedding_path):
+                self.video_ids.append(video_id)
+        
+        # Optionally print how many videos were filtered out
+        print(f"Kept {len(self.video_ids)} out of {len(self.data)} videos (filtered out {len(self.data) - len(self.video_ids)} with missing embeddings)")
+        
+        # Store embedding directory and model ID
+        self.embedding_dir = embedding_dir
+    
     def __len__(self):
-        return len(self.video_embeddings_list)  # number of videos
-
+        """Return the number of videos in the dataset"""
+        return len(self.video_ids)
+    
     def __getitem__(self, idx):
-        return {
-            'video': self.video_embeddings_list[idx],        # (N, clip_dim)
-            'queries': self.queries_list[idx],               # list of str
-            'start_indices': self.start_indices_list[idx],   # list of ints
-            'end_indices': self.end_indices_list[idx]        # list of ints
+        """
+        Get a video and its associated data
+        Downsampled by the frate rate
+        Args:
+            idx (int): Index of the video to return
+        
+        Returns:
+            dict: Dictionary containing the video data and embedding
+        """
+        # Get the video ID
+        video_id = self.video_ids[idx]
+        
+        # Get the video data
+        video_data = self.data[video_id]
+        
+        # Load the video embedding
+        embedding_path = os.path.join(self.embedding_dir, f"{video_id}.npy")
+        embedding = np.load(embedding_path)
+        # downsample
+        if self.frame_rate < 16:
+            downsample_ratio = 16 // self.frame_rate
+            embedding = embedding[::downsample_ratio]
+            
+        # Prepare return values
+        result = {
+            # metadata as strings
+            'video_id': video_id,
+            'sentences': video_data['sentences'],
+
+            # raw outputs as strings
+            'timestamps': video_data['timestamps'],
+            'video_duration': video_data['video_duration'],
+
+            # sampling related
+            'decode_fps': self.frame_rate,
+            'embedding': embedding, # (num_frames, clip_dim)
         }
 
-def video_query_collate_fn(batch, tokenizer):
+        # Downsample
+        framestamps = video_data['framestamps']
+        if self.frame_rate < 16:
+            downsample_ratio = 16 // self.frame_rate
+            framestamps = [ 
+                [round(start / downsample_ratio), 
+                 round(end / downsample_ratio)]
+                    for start, end in video_data['framestamps']
+            ]
+        result['framestamps'] = framestamps
+
+        return result
+
+
+# Example usage:
+def create_charades_dataloader(json_file, embedding_dir, batch_size=1, shuffle=True, num_workers=0):
     """
-    batch: list of dicts from __getitem__
-    tokenizer: pre-initialized tokenizer (e.g. BertTokenizer)
-    Returns a dict of:
-      - input_ids: (M, T)
-      - attention_mask: (M, T)
-      - video_embeddings: (M, N, clip_dim)
-      - start_idx: (M,)
-      - end_idx: (M,)
+    Create a DataLoader for the Charades dataset with video embeddings
+    
+    Args:
+        json_file (str): Path to the JSON file with charades data
+        embedding_dir (str): Directory containing the video embeddings
+        batch_size (int): Batch size for the dataloader
+        shuffle (bool): Whether to shuffle the dataset
+        num_workers (int): Number of workers for the dataloader
+    
+    Returns:
+        DataLoader: PyTorch DataLoader for the Charades dataset
     """
-    all_queries = []
-    all_videos = []
-    all_start = []
-    all_end = []
-
-    for item in batch:
-        video = item['video']            # (N, D)
-        queries = item['queries']
-        starts = item['start_indices']
-        ends = item['end_indices']
-
-        for q, s, e in zip(queries, starts, ends):
-            all_queries.append(q)
-            all_videos.append(video)
-            all_start.append(s)
-            all_end.append(e)
-
-    # Tokenize all queries together
-    encodings = tokenizer(
-        all_queries,
-        padding=True,
-        truncation=True,
-        return_tensors="pt"
-    )
-
-    input_ids = encodings['input_ids']              # (M, T)
-    attention_mask = encodings['attention_mask']    # (M, T)
-
-    # Pad video tensors to max length
-    max_len = max(v.shape[0] for v in all_videos)
-    clip_dim = all_videos[0].shape[1]
-    padded_videos = torch.zeros(len(all_videos), max_len, clip_dim)
-
-    for i, v in enumerate(all_videos):
-        padded_videos[i, :v.shape[0]] = v
-
-    return {
-        'input_ids': input_ids,                           # (M, T)
-        'attention_mask': attention_mask,                 # (M, T)
-        'video_clip_embeddings': padded_videos,           # (M, max_N, D)
-        'start_frame_idx': torch.tensor(all_start),       # (M,)
-        'end_frame_idx': torch.tensor(all_end)            # (M,)
-    }
-
-
-if __name__ == "__main__":
-    # Example:
-    video_embeddings = torch.randn(10, 256, 512)  # (Batch_size, num_frames, clip_dim)
-    text_queries = [['What happens in this scene?', 'Who is in the shot?']] * 10  # (Batch_size, num_queries)
-    start_frame_idx = torch.randint(0, 256, (10,))  # (Batch_size,)
-    end_frame_idx = torch.randint(0, 256, (10,))  # (Batch_size,)
-
-    # Initialize Dataset and DataLoader
-    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    dataset = MomentDataset(video_embeddings, text_queries, start_frame_idx, end_frame_idx)
-    dataloader = DataLoader(
+    dataset = MomentDataset(json_file, embedding_dir, frame_rate=16)
+    return DataLoader(
         dataset,
-        batch_size=4,  # this is number of videos; can be tuned
-        collate_fn=lambda batch: video_query_collate_fn(batch, tokenizer),
-        shuffle=True
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers
     )
+
+# Example usage
+if __name__ == "__main__":
+    # Create dataloader
+    json_file = "data/Charades-CD/charades_val.json"
+    embedding_dir = "data/clip_video_feature_vector"
+    dataloader = create_charades_dataloader(json_file, embedding_dir, shuffle=False)
+    
+    # Iterate through the dataloader
+    for i, batch in enumerate(dataloader):
+        if i >= 3:  # Just show first 3 examples
+            break
+
+        print(batch['embedding'])
+        print(batch['framestamps'])
+        print(batch['timestamps'])
+        print(batch['sentences'])
