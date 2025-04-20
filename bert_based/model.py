@@ -42,7 +42,7 @@ class DiceLoss(nn.Module):
         self.smooth = smooth
         self.reduction = reduction
         
-    def forward(self, logits, start_frames, end_frames):
+    def forward(self, logits, intervals):
         """
         Calculate dice loss
         
@@ -55,6 +55,12 @@ class DiceLoss(nn.Module):
             Dice loss value
         """
         # Convert logits to probabilities
+        
+        start_frames = [interval[0] for interval in intervals]
+        end_frames = [interval[1] for interval in intervals]
+        start_frames = torch.tensor(start_frames, device=logits.device)
+        end_frames = torch.tensor(end_frames, device=logits.device)
+        
         probs = torch.sigmoid(logits)
         
         # Create target masks

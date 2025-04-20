@@ -2,6 +2,7 @@ import torch
 
 from bert_based.model import MomentBERT
 from bert_based.data_loader import MomentDataset
+from bert_based.model import DiceLoss
 
 def train(model, dataset, loss_fn, optimizer, device):
     """
@@ -65,7 +66,7 @@ if __name__ == "__main__":
     
     num_epochs = 10
     
-    loss_fn = VideoMomentLoss()
+    loss_fn = DiceLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     
     for i in range(num_epochs):
