@@ -1,75 +1,79 @@
 import torch
 
-from bert_based.model import VideoTextBERTWithPredictionHead
+from bert_based.model import MomentBERT
+from bert_based.data_loader import MomentDataset
 
-def train(model, dataloader, loss_fn, optimizer, device):
+def train(model, dataset, loss_fn, optimizer, device):
     """
     Training loop for video moment retrieval.
 
-    model: VideoTextBERTWithPredictionHead
-    dataloader: yields dict with tokenized text, video embeddings, labels
+    model: MomentBERT
+    dataloader (MomentDataset): yields dict with tokenized text, video embeddings, labels
     loss_fn: VideoMomentLoss
     optimizer: AdamW or similar
     device: CUDA or CPU
     """
     model.train()
     total_loss = 0
-    total_start_loss = 0
-    total_end_loss = 0
-    num_batches = len(dataloader)
+    num_batches = len(dataset)
 
-    for batch_idx, batch in enumerate(dataloader):
-        input_ids = batch['input_ids'].to(device)                    # (M, T)
-        attention_mask = batch['attention_mask'].to(device)          # (M, T)
-        video_clip_embeddings = batch['video_clip_embeddings'].to(device)  # (M, N, D)
-        start_frame_idx = batch['start_frame_idx'].to(device)        # (M,)
-        end_frame_idx = batch['end_frame_idx'].to(device)            # (M,)
+    for idx, data in enumerate(dataset):
+
+        queries = data['sentences']  # List of sentences, length B
+        video_clip_embeddings = data['embedding'].to(device)  # Video embeddings (num_frames, clip_dim)
+        framestamps = data['framestamps']
 
         optimizer.zero_grad()
+        
+        result = model.forward(queries, video_clip_embeddings) # (B, N_frames)
 
-        # Forward pass
-        start_logits, end_logits = model(input_ids, attention_mask, video_clip_embeddings)
-
+        # predictions: (B, N_frames)
+        # gt: [[start, end], [start, end]]
         # Compute loss
-        total_batch_loss, start_loss, end_loss = loss_fn(start_logits, end_logits, start_frame_idx, end_frame_idx)
+        loss = loss_fn(result, framestamps)
 
         # Backprop + optimize
-        total_batch_loss.backward()
+        loss.backward()
         optimizer.step()
 
         # Logging
-        total_loss += total_batch_loss.item()
-        total_start_loss += start_loss.item()
-        total_end_loss += end_loss.item()
+        total_loss += loss.item()
 
-        if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == num_batches:
-            print(f"Batch {batch_idx+1}/{num_batches} | "
-                  f"Loss: {total_batch_loss.item():.4f} | "
-                  f"Start: {start_loss.item():.4f} | End: {end_loss.item():.4f}")
-
+        if (idx + 1) % 10 == 0 or (idx + 1) == num_batches:
+            print(f"Batch {idx+1}/{num_batches} | "
+                  f"Loss: {loss.item():.4f} | ")
+            
     # Epoch-level summary
     avg_loss = total_loss / num_batches
-    avg_start = total_start_loss / num_batches
-    avg_end = total_end_loss / num_batches
-    print(f"\nEpoch Summary — Loss: {avg_loss:.4f} | Start: {avg_start:.4f} | End: {avg_end:.4f}")
-
     return avg_loss
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = MomentBERT().to(device)
-    # tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-    # dataset = MomentDataset(video_embeddings, text_queries, start_frame_idx, end_frame_idx)
-    # dataloader = DataLoader(
-    #     dataset,
-    #     batch_size=4,  # this is number of videos; can be tuned
-    #     collate_fn=lambda batch: video_query_collate_fn(batch, tokenizer),
-    #     shuffle=True
-    # )
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    
+    model = MomentBERT().to(device)
+    train_dataset = MomentDataset(
+        json_file="data/Charades-CD/charades_train.json",
+        embedding_dir="data/clip_video_feature_vector",
+        frame_rate=4
+    )
+    
+    num_epochs = 10
+    
+    loss_fn = VideoMomentLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    
+    for i in range(num_epochs):
+        print(f"\nEpoch {i+1}/{num_epochs}")
+        # Assuming loss_fn and optimizer are defined
+        avg_loss = train(model, train_dataset, loss_fn, optimizer, device)
 
-    # loss_fn = VideoMomentLoss() #TODO
-    # optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+    
 
     # for epoch in range(num_epochs):
     #     print(f"\nEpoch {epoch+1}/{num_epochs}")
