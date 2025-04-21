@@ -159,6 +159,7 @@ class MomentBERT(nn.Module):
             self.end_head = nn.Linear(hidden_dim, 1)
         
         self.prediction_head = prediction_head
+        self.max_video_len = max_video_len
 
     def forward(self, queries, video_clip_embeddings):
         """
