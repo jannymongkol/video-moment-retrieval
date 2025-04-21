@@ -87,6 +87,58 @@ class DiceLoss(nn.Module):
         else:  # 'none'
             return loss
 
+class IntervalBCELoss(nn.Module):
+    def __init__(self, smooth=1e-3, reduction='mean'):
+        """
+        Dice Loss for binary classification with logits
+        
+        Args:
+            smooth: Smoothing term to avoid division by zero
+            reduction: 'mean', 'sum', or 'none'
+        """
+        super(IntervalBCELoss, self).__init__()
+        self.reduction = reduction
+        
+    def forward(self, logits, intervals):
+        """
+        Calculate BCE loss
+        
+        Args:
+            logits: Model predictions as logits (batch_size, num_frames)
+            start_frames: Start frame indices (batch_size,)
+            end_frames: End frame indices (batch_size,)
+            
+        Returns:
+            BCE loss value
+        
+        """
+        # Convert logits to probabilities
+        
+        start_frames = [interval[0] for interval in intervals]
+        end_frames = [interval[1] for interval in intervals]
+        start_frames = torch.tensor(start_frames, device=logits.device)
+        end_frames = torch.tensor(end_frames, device=logits.device)
+        
+        probs = torch.sigmoid(logits)
+        
+        # Create target masks
+        num_frames = logits.size(1)
+        
+        targets = create_target_mask(start_frames, end_frames, num_frames, logits.device)
+        
+        # Calculate dice coefficient per sample
+        batch_size = logits.size(0)
+        
+        bce_loss = F.binary_cross_entropy(probs, targets, reduction='none')  # (batch_size, num_frames)
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return bce_loss.mean()
+        elif self.reduction == 'sum':
+            return bce_loss.sum()
+        else:  # 'none'
+            return bce_loss
+
 class MomentBERT(nn.Module):
     def __init__(self, clip_dim=512, hidden_dim=768, max_video_len=384, bert_trainable=False, prediction_head='in_out'):
         super().__init__()
