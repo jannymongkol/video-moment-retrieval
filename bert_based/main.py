@@ -32,7 +32,7 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
 
     # Create progress bar
     pbar = tqdm(enumerate(dataset), total=num_batches, desc='Training', leave=True)
-    
+    num_train_examples = 0
     for idx, data in pbar:
         queries = data['sentences']  # List of sentences, length B
         video_clip_embeddings = torch.from_numpy(data['embedding']).to(device)  # Video embeddings (num_frames, clip_dim)
@@ -47,11 +47,12 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
         # predictions: (B, N_frames)
         # gt: [[start, end], [start, end]]
         # Compute loss
-        loss = loss_fn(result, framestamps)
+        loss = loss_fn(result, framestamps, reduction='sum')
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
+        num_train_examples += len(queries)
 
         if (idx + 1) % 10 == 0 or (idx + 1) == num_batches:
             # Update progress bar
@@ -61,22 +62,27 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
             )
 
     # Epoch-level summary
-    avg_loss = total_loss / num_batches
+    avg_loss = total_loss / num_train_examples
     
     if val_dataset is not None:
         model.eval()
         val_loss = 0
+        num_val_batches = 0
         with torch.no_grad():
             for idx, data in enumerate(val_dataset):
                 queries = data['sentences']
                 video_clip_embeddings = torch.from_numpy(data['embedding']).to(device)
                 framestamps = data['framestamps']
+                
+                if video_clip_embeddings.shape[0] > model.max_video_len:
+                    continue
 
+                num_val_batches += len(queries)
                 result = model.forward(queries, video_clip_embeddings)
-                loss = loss_fn(result, framestamps)
+                loss = loss_fn(result, framestamps, reduction='sum')
                 val_loss += loss.item()
 
-        avg_val_loss = val_loss / len(val_dataset)
+        avg_val_loss = val_loss / num_val_batches
         print(f"Validation Loss: {avg_val_loss:.4f}")
     
         return avg_loss, avg_val_loss
@@ -153,7 +159,7 @@ if __name__ == "__main__":
         os.makedirs("checkpoints", exist_ok=True)
         
         # Model setup
-        model = MomentBERT().to(device)
+        model = MomentBERT(num_hidden=1).to(device)
         train_dataset = MomentDataset(
             dataset_json_file="data/Charades-CD/charades_train.json",
             embedding_dir="data/clip_video_feature_vector",
@@ -165,10 +171,10 @@ if __name__ == "__main__":
             embedding_dir="data/clip_video_feature_vector",
             frame_rate=4
         )    
-        num_epochs = 10
+        num_epochs = 5
 
         loss_fn = IntervalBCELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
         
         # Training tracking
         best_loss = float('inf')
@@ -193,13 +199,13 @@ if __name__ == "__main__":
             }
             
             # Save current epoch
-            torch.save(checkpoint, f"checkpoints/moment_bert_epoch_{epoch+1}.pt")
+            torch.save(checkpoint, f"checkpoints/moment_bert_1_hidden_epoch_{epoch+1}.pt")
             
             # Update best model if needed
             if avg_val_loss < best_loss:
                 best_loss = avg_val_loss
                 best_epoch = epoch + 1
-                torch.save(checkpoint, "checkpoints/moment_bert_best.pt")
+                torch.save(checkpoint, "checkpoints/moment_bert_1_hidden_best.pt")
         
         end_time = datetime.now()
         training_time = end_time - start_time
