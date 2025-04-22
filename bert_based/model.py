@@ -140,7 +140,7 @@ class IntervalBCELoss(nn.Module):
             return bce_loss
 
 class MomentBERT(nn.Module):
-    def __init__(self, clip_dim=512, hidden_dim=768, max_video_len=384, bert_trainable=False, prediction_head='in_out'):
+    def __init__(self, clip_dim=512, hidden_dim=768, max_video_len=384, bert_trainable=False, prediction_head='in_out', num_hidden=0, inner_dim=512):
         super().__init__()
         self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
         self.bert = BertModel.from_pretrained("bert-base-uncased")
@@ -148,7 +148,18 @@ class MomentBERT(nn.Module):
         for param in self.bert.parameters():
             param.requires_grad = bert_trainable
 
-        self.video_proj = nn.Linear(clip_dim, hidden_dim)
+        if num_hidden == 0:
+            self.video_proj = nn.Linear(clip_dim, hidden_dim)
+        else:
+            layers = []
+            start_size = clip_dim
+            for _ in range(num_hidden):
+                layers.append(nn.Linear(start_size, inner_dim))
+                layers.append(nn.ReLU())
+                start_size = inner_dim
+            layers.append(nn.Linear(inner_dim, hidden_dim))
+            
+            self.video_proj = nn.Sequential(*layers)
         self.video_pos_embed = nn.Embedding(max_video_len, hidden_dim)
 
         if prediction_head == 'in_out':
