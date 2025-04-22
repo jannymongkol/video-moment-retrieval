@@ -234,7 +234,7 @@ if __name__ == "__main__":
         
     elif sys.argv[1] == "predict":
         # Load the best model
-        checkpoint = torch.load("checkpoints/moment_bert_best.pt")
+        checkpoint = torch.load("frozen_bert_in_out/moment_bert_best.pt")
         model = MomentBERT(num_hidden=0).to(device)
         model.load_state_dict(checkpoint['model_state_dict'])
         
