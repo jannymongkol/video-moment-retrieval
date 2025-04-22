@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from bert_based.model import MomentBERT
 from bert_based.data_loader import MomentDataset
-from bert_based.model import DiceLoss
+from bert_based.model import DiceLoss, IntervalBCELoss
 
 
 def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
@@ -127,6 +127,7 @@ if __name__ == "__main__":
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
+    print(device)
     
     # Create checkpoint directory
     os.makedirs("checkpoints", exist_ok=True)
@@ -146,8 +147,8 @@ if __name__ == "__main__":
     )    
     num_epochs = 10
 
-    loss_fn = DiceLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    loss_fn = IntervalBCELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     
     # Training tracking
     best_loss = float('inf')
