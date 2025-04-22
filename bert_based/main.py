@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from bert_based.model import MomentBERT
 from bert_based.data_loader import MomentDataset
-from bert_based.model import DiceLoss, IntervalBCELoss
+from bert_based.model import DiceLoss, IntervalBCELoss, StartEndBCELoss
 from bert_based.predict_utils import kmeans_region_detection, visualize_intervals, visualize_random_subsamples
 from eval.rn_IoUm import r1_IoUm_sum
 
@@ -48,7 +48,7 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
         # predictions: (B, N_frames)
         # gt: [[start, end], [start, end]]
         # Compute loss
-        loss = loss_fn(result, framestamps, reduction='sum')
+        loss = loss_fn(result, framestamps)
         loss.backward()
         optimizer.step()
 
@@ -80,7 +80,7 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
 
                 num_val_batches += len(queries)
                 result = model.forward(queries, video_clip_embeddings)
-                loss = loss_fn(result, framestamps, reduction='sum')
+                loss = loss_fn(result, framestamps)
                 val_loss += loss.item()
 
         avg_val_loss = val_loss / num_val_batches
@@ -172,7 +172,7 @@ if __name__ == "__main__":
         os.makedirs("checkpoints", exist_ok=True)
         
         # Model setup
-        model = MomentBERT(num_hidden=1).to(device)
+        model = MomentBERT(num_hidden=1, prediction_head='start_end').to(device)
         train_dataset = MomentDataset(
             dataset_json_file="data/Charades-CD/charades_train.json",
             embedding_dir="data/clip_video_feature_vector",
@@ -186,7 +186,7 @@ if __name__ == "__main__":
         )    
         num_epochs = 5
 
-        loss_fn = IntervalBCELoss()
+        loss_fn = StartEndBCELoss(reduction='sum')
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
         
         # Training tracking
@@ -212,13 +212,13 @@ if __name__ == "__main__":
             }
             
             # Save current epoch
-            torch.save(checkpoint, f"checkpoints/moment_bert_1_hidden_epoch_{epoch+1}.pt")
+            torch.save(checkpoint, f"checkpoints/moment_bert_1_hid_stend_epoch_{epoch+1}.pt")
             
             # Update best model if needed
             if avg_val_loss < best_loss:
                 best_loss = avg_val_loss
                 best_epoch = epoch + 1
-                torch.save(checkpoint, "checkpoints/moment_bert_1_hidden_best.pt")
+                torch.save(checkpoint, "checkpoints/moment_bert_1_hid_stend_best.pt")
         
         end_time = datetime.now()
         training_time = end_time - start_time

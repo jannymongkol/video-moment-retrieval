@@ -138,6 +138,61 @@ class IntervalBCELoss(nn.Module):
             return bce_loss.sum()
         else:  # 'none'
             return bce_loss
+        
+class StartEndBCELoss(nn.Module):
+    def __init__(self, smooth=1e-3, reduction='mean'):
+        """
+        Dice Loss for binary classification with logits
+        
+        Args:
+            smooth: Smoothing term to avoid division by zero
+            reduction: 'mean', 'sum', or 'none'
+        """
+        super(StartEndBCELoss, self).__init__()
+        self.reduction = reduction
+        
+    def forward(self, logits, intervals):
+        """
+        Calculate BCE loss
+        
+        Args:
+            start_logits: Model predictions for start frame as logits (batch_size, num_frames)
+            end_logits: Model predictions for end frame as logits (batch_size, num_frames)
+            intervals: List of tuples containing start and end frame indices (batch_size, 2)
+            
+        Returns:
+            BCE loss value
+        
+        """
+        # Convert logits to probabilities
+        
+        start_logits, end_logits = logits
+        
+        start_frames = [interval[0] for interval in intervals]
+        end_frames = [interval[1] for interval in intervals]
+        
+        probs_start = torch.sigmoid(start_logits)
+        probs_end = torch.sigmoid(end_logits)
+        
+        ground_truth_start = torch.zeros_like(probs_start)
+        ground_truth_end = torch.zeros_like(probs_start)
+        for i in range(probs_start.shape[0]):
+            ground_truth_start[i, start_frames[i]] = 1.0
+            ground_truth_end[i, min(end_frames[i], probs_start.shape[1]-1)] = 1.0
+        
+        start_bce_loss = F.binary_cross_entropy(probs_start, ground_truth_start, reduction='none')  # (batch_size, num_frames)
+        end_bce_loss = F.binary_cross_entropy(probs_end, ground_truth_end, reduction='none')  # (batch_size, num_frames)
+        
+        # Combine start and end BCE loss
+        bce_loss = start_bce_loss + end_bce_loss
+        
+        # Apply reduction
+        if self.reduction == 'mean':
+            return bce_loss.mean()
+        elif self.reduction == 'sum':
+            return bce_loss.sum()
+        else:  # 'none'
+            return bce_loss
 
 class MomentBERT(nn.Module):
     def __init__(self, clip_dim=512, hidden_dim=768, max_video_len=384, bert_trainable=False, prediction_head='in_out', num_hidden=0, inner_dim=512):
