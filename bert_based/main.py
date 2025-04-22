@@ -13,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from bert_based.model import MomentBERT
 from bert_based.data_loader import MomentDataset
 from bert_based.model import DiceLoss, IntervalBCELoss
+from bert_based.predict_utils import kmeans_region_detection, visualize_intervals, visualize_random_subsamples
 from eval.rn_IoUm import r1_IoUm_sum
 
 
@@ -89,7 +90,7 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
     else:
         return avg_loss
 
-def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9]):
+def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9], predictor_fn="argmax"):
     """
     Prediction loop for video moment retrieval.
 
@@ -98,12 +99,13 @@ def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9]):
     device: CUDA or CPU
     """
     model.eval()
-    predictions = []
+    predictions = {}
     output = {}
     
     results = {}
     total_sum_r1_iou = {iou: 0 for iou in ious}
     total_queries = 0
+
     with torch.no_grad():
         for i,data in tqdm(enumerate(test_dataset)):
             
@@ -115,19 +117,25 @@ def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9]):
                 continue
 
             result = model.forward(queries, video_clip_embeddings)
+            result = torch.sigmoid(result)
             result = result.cpu().numpy()
             
-            pred_clip_length = 8 * data['decode_fps'] # placeholder
-            max_framestamps = np.argmax(result, axis=1) # (batch_size, 1)
-            num_frames = result.shape[1]
+            if predictor_fn == "argmax":
+                pred_clip_length = 8 * data['decode_fps'] # placeholder
+                max_framestamps = np.argmax(result, axis=1) # (batch_size, 1)
+                num_frames = result.shape[1]
 
-            lower_bound = np.maximum(0, max_framestamps - pred_clip_length//2)
-            upper_bound = np.minimum(num_frames, max_framestamps + pred_clip_length//2)
-
-            bounds = np.stack([lower_bound, upper_bound], axis=0).T # (2, batch_size)
+                lower_bound = np.maximum(0, max_framestamps - pred_clip_length//2)
+                upper_bound = np.minimum(num_frames, max_framestamps + pred_clip_length//2)
+                bounds = np.stack([lower_bound, upper_bound], axis=0).T # (2, batch_size)
+            elif predictor_fn == "kmeans":
+                # Use kmeans to find the regions
+                spans = kmeans_region_detection(result)
+                bounds = np.stack(spans, axis=1).T # (2, batch_size)
             
             output[key] = bounds.tolist()
-            
+            predictions[key] = result.tolist()
+
             gt_intervals = np.array(data['framestamps'])
             pred_intervals = bounds
             
@@ -141,6 +149,11 @@ def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9]):
             'R1 IoU': total_sum_r1_iou[iou],
         }
         print(f"R1 IoU@{iou}: {total_sum_r1_iou[iou]:.4f}")
+
+    with open(f"predictions_{predictor_fn}_iid.json", "w") as f:
+        # json.dump(output, f)
+        json.dump(predictions, f)
+        print(f"Predictions saved to predictions_{predictor_fn}.json")
         
     return results
 
@@ -222,7 +235,7 @@ if __name__ == "__main__":
     elif sys.argv[1] == "predict":
         # Load the best model
         checkpoint = torch.load("checkpoints/moment_bert_best.pt")
-        model = MomentBERT().to(device)
+        model = MomentBERT(num_hidden=0).to(device)
         model.load_state_dict(checkpoint['model_state_dict'])
         
         # Create test dataset
@@ -232,22 +245,47 @@ if __name__ == "__main__":
             frame_rate=4
         )
         
-        # Create test dataset
-        test_ood_dataset = MomentDataset(
-            dataset_json_file="data/Charades-CD/charades_test_ood.json",
-            embedding_dir="data/clip_video_feature_vector",
-            frame_rate=4
-        )
+        # # Create test dataset
+        # test_ood_dataset = MomentDataset(
+        #     dataset_json_file="data/Charades-CD/charades_test_ood.json",
+        #     embedding_dir="data/clip_video_feature_vector",
+        #     frame_rate=4
+        # )
         
         # Make predictions
-        predictions = predict(model, test_iid_dataset, device)
+        predictions = predict(model, test_iid_dataset, device, predictor_fn="kmeans")
         
         # Save predictions to JSON file
         with open("bert_test_iid.json", "w") as f:
             json.dump(predictions, f)
             
-        predictions = predict(model, test_ood_dataset, device)
+        # predictions = predict(model, test_ood_dataset, device, predictor_fn="kmeans")
         
-        # Save predictions to JSON file
-        with open("bert_test_ood.json", "w") as f:
-            json.dump(predictions, f)
+        # # Save predictions to JSON file
+        # with open("bert_test_ood.json", "w") as f:
+        #     json.dump(predictions, f)
+
+    elif sys.argv[1] == "analyze":
+        pred_fname = sys.argv[2] if len(sys.argv) > 2 else "predictions_kmeans_ood.json"
+        source_fname = sys.argv[3] if len(sys.argv) > 3 else "data/Charades-CD/charades_test_ood.json"
+
+        visualize_random_subsamples(
+            source=source_fname,
+            predictions=pred_fname,
+            num_sample=5,
+            frame_rate=4
+        )
+
+        
+        # Make predictions
+        # predictions = predict(model, test_iid_dataset, device, predictor_fn="kmeans")
+        
+        # # Save predictions to JSON file
+        # with open("bert_test_iid.json", "w") as f:
+        #     json.dump(predictions, f)
+            
+        # predictions = predict(model, test_ood_dataset, device, predictor_fn="kmeans")
+        
+        # # Save predictions to JSON file
+        # with open("bert_test_ood.json", "w") as f:
+        #     json.dump(predictions, f)
