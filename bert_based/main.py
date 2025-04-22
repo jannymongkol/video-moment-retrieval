@@ -2,6 +2,7 @@ import torch
 
 import os
 import sys
+import numpy as np
 from tqdm import tqdm
 from datetime import datetime
 
@@ -79,6 +80,44 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
     else:
         return avg_loss
 
+def predict(model, val_dataset, device, distance_fn, selector='argmax'):
+    """
+    Prediction loop for video moment retrieval.
+
+    model: MomentBERT
+    dataloader (MomentDataset): yields dict with tokenized text, video embeddings, labels
+    device: CUDA or CPU
+    """
+    model.eval()
+    predictions = []
+    
+    with torch.no_grad():
+        for data in val_dataset:
+            
+            queries = data['sentences']
+            video_clip_embeddings = torch.from_numpy(data['embedding']).to(device)
+            framestamps = data['framestamps']
+
+            result = model.forward(queries, video_clip_embeddings)
+            result = result.cpu().numpy()
+            
+            if selector == 'argmax':
+                # Apply thresholding to get binary predictions
+                pred_clip_length = 8 // data['decode_fps'] # placeholder
+                max_framestamps = np.argmax(result, axis=1) # (batch_size, 1)
+                num_frames = result.shape[1]
+
+                lower_bound = np.maximum(0, max_framestamps - pred_clip_length//2)
+                upper_bound = np.minimum(num_frames, max_framestamps + pred_clip_length//2)
+
+                bounds = np.stack([lower_bound, upper_bound], axis=1) # (batch_size, 2)
+                predictions.append(bounds)
+
+        # TODO: use distance_fn to compute distances
+
+
+
+    return predictions
 
 if __name__ == "__main__":
     # Setup device
@@ -88,8 +127,6 @@ if __name__ == "__main__":
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
-    print(device)
-    exit(0)
     
     # Create checkpoint directory
     os.makedirs("checkpoints", exist_ok=True)
