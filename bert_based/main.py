@@ -13,7 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from bert_based.model import MomentBERT
 from bert_based.data_loader import MomentDataset
 from bert_based.model import DiceLoss, IntervalBCELoss, StartEndBCELoss
-from bert_based.predict_utils import kmeans_region_detection, visualize_intervals, visualize_random_subsamples
+from bert_based.predict_utils import kmeans_region_detection, visualize_intervals, visualize_random_subsamples, visualize_baseline
 from eval.rn_IoUm import r1_IoUm_sum
 
 
@@ -269,12 +269,28 @@ if __name__ == "__main__":
         pred_fname = sys.argv[2] if len(sys.argv) > 2 else "predictions_kmeans_ood.json"
         source_fname = sys.argv[3] if len(sys.argv) > 3 else "data/Charades-CD/charades_test_ood.json"
 
-        visualize_random_subsamples(
-            source=source_fname,
-            predictions=pred_fname,
-            num_sample=5,
-            frame_rate=4
-        )
+        run_label = sys.argv[4] if len(sys.argv) > 4 else "baseline"
+        split_label = sys.argv[5] if len(sys.argv) > 4 else "iid"
+
+        if run_label == "baseline":
+            visualize_baseline(
+                source=source_fname,
+                predictions=pred_fname,
+                run_label=run_label,
+                split_label=split_label,
+                num_sample=5,
+                frame_rate=16
+            )
+        else:
+            visualize_random_subsamples(
+                source=source_fname,
+                predictions=pred_fname,
+                run_label=run_label,
+                split_label=split_label,
+                num_sample=5,
+                frame_rate=4
+            )
+
 
         
         # Make predictions

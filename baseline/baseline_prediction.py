@@ -18,6 +18,7 @@ def pred(video_id, pred_clip_length=128):
     predictions = np.argmax(similarity_matrix, axis=0)
     
     num_frames = video_embeddings.shape[0]
+    plotted_similarity_matrix = np.clip(similarity_matrix, 0, num_frames)
     
     # The videos are 16 fps. I want to get a 6 second clip of the video, with the predicted frame in the middle
     # Give me lower and upper bounds for the clip
@@ -26,7 +27,7 @@ def pred(video_id, pred_clip_length=128):
     
     # Concatenate the lower and upper bounds to form a (num_sentences, 2) array, and return it
     predictions = np.stack([lower_bound, upper_bound], axis=0)
-    return predictions.T
+    return predictions.T, plotted_similarity_matrix
     
     
 
@@ -36,16 +37,21 @@ def get_predictions(json_file_path, prediction_output_path):
         data = json.load(file)
     
     output = {}
+    plottable = {}
     
     # Loop through all the keys of the dictionary
     for key in data.keys():
-        predictions = pred(key)
+        predictions, plotting_matrix = pred(key)
         output[key] = predictions.tolist()
+        plottable[key] = plotting_matrix.tolist()
     
     # Save json file to the output path
     with open(prediction_output_path, 'w') as file:
         json.dump(output, file)
         
+    # Save json file to the output path
+    with open("plot"+prediction_output_path, 'w') as file:
+        json.dump(plottable, file)
 
 if __name__ == "__main__":
     # Get the json file path and the prediction output path from the command line

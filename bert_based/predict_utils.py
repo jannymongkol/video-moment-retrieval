@@ -1,4 +1,5 @@
 import json
+import os
 import numpy as np
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
@@ -43,16 +44,20 @@ def kmeans_region_detection(logits, n_clusters=2):
     
     return all_spans
 
-def visualize_intervals(true_interval, predicted_logits, video_id, run_label, query_id):
+def visualize_intervals(true_interval, predicted_logits, predicted_interval, video_id, run_label, split_label, query_id):
     # Create a figure
     plt.figure(figsize=(10, 5))
     
     # Plot true intervals
     # plt.plot(interval, [1, 1], color='green', linewidth=5, label='True Interval')
     plt.axvspan(true_interval[0], true_interval[1], color='green', alpha=0.5, label='True Interval')
+
+    if predicted_interval is not None:
+        plt.axvspan(predicted_interval[0], predicted_interval[1], color='orange', alpha=0.3, label='Predicted Interval')
+
     
     # Plot predicted intervals
-    plt.plot(predicted_logits, color='red', label='Predicted Interval')
+    plt.plot(predicted_logits, color='red', label='Predicted Probability')
     
     # Set title and labels
     plt.title(f'Video ID: {video_id}')
@@ -64,10 +69,12 @@ def visualize_intervals(true_interval, predicted_logits, video_id, run_label, qu
     plt.legend()
     
     # save the figure
-    plt.savefig(f'visualizations/{run_label}_{video_id}_{query_id}.png')
+    if not os.path.exists(f"visualizations/{run_label}/{split_label}"):
+        os.makedirs(f"visualizations/{run_label}/{split_label}")
+    plt.savefig(f"visualizations/{run_label}/{split_label}/{video_id}_{query_id}.png")
     plt.close()
     
-def visualize_random_subsamples(source, predictions, num_sample=5, frame_rate=16):
+def visualize_random_subsamples(source, predictions, run_label, split_label, num_sample=5, frame_rate=16):
     with open(source, 'r') as f:
         source_json = json.load(f)
 
@@ -78,10 +85,8 @@ def visualize_random_subsamples(source, predictions, num_sample=5, frame_rate=16
     keys = list(pred_json.keys())
     random_keys = np.random.choice(keys, num_sample, replace=False)
     for key in random_keys:
-        print(key)
         queries = source_json[key]['sentences']
         framestamps = source_json[key]['framestamps']
-        print(framestamps)
         if frame_rate < 16:
             downsample_ratio = 16 // frame_rate
             framestamps = [ 
@@ -97,10 +102,15 @@ def visualize_random_subsamples(source, predictions, num_sample=5, frame_rate=16
         for i, q in enumerate(queries):
             # get the true interval
             true_interval = framestamps[i]
-            print(true_interval)
+
             # get the predicted logits
             predicted_logits = logits[i]
-            print(predicted_logits)
+            spans = kmeans_region_detection(predicted_logits.reshape(1, -1))[0]
+
+            true_interval = [
+                min(true_interval[0], len(predicted_logits) - 1),
+                min(true_interval[1], len(predicted_logits) - 1)
+            ]
 
             # get the video id
             video_id = key
@@ -108,5 +118,65 @@ def visualize_random_subsamples(source, predictions, num_sample=5, frame_rate=16
             query_id = i
 
             # visualize the intervals
-            visualize_intervals(true_interval, predicted_logits, video_id, 'random_subsample', query_id)
+            visualize_intervals(true_interval, predicted_logits, spans,
+                                video_id, 
+                                run_label, split_label,
+                                query_id)
+        
+
+def visualize_baseline(source, predictions, run_label, split_label, num_sample=5, frame_rate=16):
+    with open(source, 'r') as f:
+        source_json = json.load(f)
+
+    with open(predictions, 'r') as f:
+        pred_json = json.load(f)
+    
+    pred_interval_fname = predictions.replace("plot", "")
+    with open(pred_interval_fname, 'r') as f:
+        pred_interval_json = json.load(f)
+
+    # get random keys
+    keys = list(pred_json.keys())
+    random_keys = np.random.choice(keys, num_sample, replace=False)
+    for key in random_keys:
+        queries = source_json[key]['sentences']
+        framestamps = source_json[key]['framestamps']
+        if frame_rate < 16:
+            downsample_ratio = 16 // frame_rate
+            framestamps = [ 
+                [
+                    round(start / downsample_ratio), 
+                    round(end / downsample_ratio)
+                ]
+                for start, end in framestamps
+            ]
+        pred_intervals = pred_interval_json[key]
+        logits = np.array(pred_json[key]).T
+        print(len(queries), len(framestamps), logits.shape)
+
+        for i, q in enumerate(queries):
+            # get the true interval
+            true_interval = framestamps[i]
+
+            # get the predicted logits
+            predicted_logits = logits[i]
+            
+            # get the predicted intervals
+            predicted_intervals = pred_intervals[i]
+
+            true_interval = [
+                min(true_interval[0], len(predicted_logits) - 1),
+                min(true_interval[1], len(predicted_logits) - 1)
+            ]
+
+            # get the video id
+            video_id = key
+            # get the query id
+            query_id = i
+
+            # visualize the intervals
+            visualize_intervals(true_interval, predicted_logits, predicted_intervals,
+                                video_id, 
+                                run_label, split_label,
+                                query_id)
         
