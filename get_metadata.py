@@ -65,7 +65,7 @@ def get_prob_interval_len(frame_rate=16, make_plot=False):
                  label='Fitted Gamma', color='red')
         plt.xlabel('Interval Proportion')
         plt.ylabel('Probability Density')
-        plt.title('Histogram of Interval Proportions')
+        plt.title(f'Histogram of Interval Proportions ({split})')
         # plt.show()
         plt.savefig(f'{split}_interval_proportion.png')
         plt.close()
