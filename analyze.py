@@ -1,11 +1,15 @@
 import torch
+import torch.nn.functional as F
 
 import os
 import sys
 import numpy as np
+from scipy.stats import gamma
 from tqdm import tqdm
 from datetime import datetime
 import json
+
+from get_metadata import get_prob_interval_len
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from bert_based.model import MomentBERT
@@ -18,19 +22,20 @@ from eval.rn_IoUm import r1_IoUm_sum, dr1_IoUm_sum
 embedding_dir = "data/clip_video_feature_vector"
 
 # Model Info
-prediction_head = "start_end"
-predictor_fn = "start argmax"
-num_hidden = 1
+prediction_head = "in_out"
+predictor_fn = "brute_force"
+alpha = 0.7
+num_hidden = 0
 frame_rate = 4
 
 # Run info
-split = "iid"
+split = "ood"
 dataset = f"data/Charades-CD/charades_test_{split}.json"
 
 is_baseline = False
-checkpoint_fname = "checkpoints/moment_bert_1_hid_stend_best.pt"
-model_nickname = "bert_1_hid_stend"
-folder = "bert_1_hid_stend/softmax"
+checkpoint_fname = "checkpoints/moment_bert_best.pt"
+model_nickname = "moment_bert"
+folder = "moment_bert/brute_force_ave_0.7_len"
 if not os.path.exists(folder):
     os.makedirs(folder)
 
@@ -43,13 +48,14 @@ if not os.path.exists(visualizations_out_folder):
 
 #############################################################
 
-def predict_from_in_out(model, queries, video_clip_embeddings, predictor_fn):
+def predict_from_in_out(model, queries, video_clip_embeddings, predictor_fn, len_pdf):
+    # print(queries)
     result = model.forward(queries, video_clip_embeddings)
     result = torch.sigmoid(result)
     result = result.cpu().numpy()
     
     if predictor_fn == "argmax":
-        pred_clip_length = 8 * data['decode_fps'] # placeholder
+        pred_clip_length = 8 * frame_rate # placeholder
         max_framestamps = np.argmax(result, axis=1) # (batch_size, 1)
         num_frames = result.shape[1]
 
@@ -60,10 +66,37 @@ def predict_from_in_out(model, queries, video_clip_embeddings, predictor_fn):
         # Use kmeans to find the regions
         spans = kmeans_region_detection(result)
         bounds = np.stack(spans, axis=1).T # (2, batch_size)
+    elif predictor_fn == "brute_force":
+        if len_pdf is None:
+            raise ValueError("len_pdf must be provided for brute_force prediction.")
+        log_result = np.log(result + 1e-6)
+        bounds = []
+        for batch_index in range(log_result.shape[0]):
+            batch_item = log_result[batch_index]
 
-    return result.tolist(), bounds    
+            n = len(batch_item)
+            cumsum = np.cumsum(batch_item)
+            cumsum = np.insert(cumsum, 0, 0)  # for easier slicing
 
-def predict_from_start_end(model, queries, video_clip_embeddings, predictor_fn):
+            best_score = float('-inf')
+            best_start, best_end = 0, 0
+
+            for start in range(n):
+                for end in range(start, n):
+                    span_sum = (cumsum[end + 1] - cumsum[start]) / (end - start + 1)
+                    proportion = (end - start) 
+                    length_score = np.log(len_pdf(proportion))
+                    # print(length_score)
+                    total_score = (1 - alpha) * span_sum + (alpha * length_score)
+                    if total_score > best_score:
+                        best_score = total_score
+                        best_start, best_end = start, end
+            bounds.append([best_start, best_end])
+        bounds = np.array(bounds) # (2, batch_size)
+
+    return result.tolist(), bounds
+
+def predict_from_start_end(model, queries, video_clip_embeddings, predictor_fn, len_pdf):
     start_result, end_result = model.forward(queries, video_clip_embeddings)
     start_result = torch.sigmoid(start_result).cpu().numpy()
     end_result = torch.sigmoid(end_result).cpu().numpy()
@@ -86,7 +119,7 @@ def predict_from_start_end(model, queries, video_clip_embeddings, predictor_fn):
     
     return [start_result.tolist(), end_result.tolist()], bounds
 
-def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9], predictor_fn="argmax"):
+def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9], predictor_fn="argmax", len_pdf=None):
     """
     Prediction loop for video moment retrieval.
 
@@ -115,9 +148,9 @@ def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9], predict
                 continue
 
             if model.prediction_head == 'in_out':
-                preds, bounds = predict_from_in_out(model, queries, video_clip_embeddings, predictor_fn)
+                preds, bounds = predict_from_in_out(model, queries, video_clip_embeddings, predictor_fn, len_pdf)
             elif model.prediction_head == 'start_end':
-                preds, bounds = predict_from_start_end(model, queries, video_clip_embeddings, predictor_fn)
+                preds, bounds = predict_from_start_end(model, queries, video_clip_embeddings, predictor_fn, len_pdf)
             
             predicted_bounds[key] = bounds.tolist()
             predictions[key] = preds
@@ -138,6 +171,7 @@ def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9], predict
         }
         print(f"R1 IoU@{iou}: {total_sum_r1_iou[iou]:.4f}")
 
+    for iou in ious:
         total_sum_dr1_iou[iou] /= total_queries
         results['dR1'][iou] = {
             'dR1 IoU': total_sum_dr1_iou[iou],
@@ -180,6 +214,12 @@ if __name__ == "__main__":
         checkpoint = torch.load(checkpoint_fname)
         model.load_state_dict(checkpoint['model_state_dict'])
 
+        len_pdf_params, proportion_pdf_params = get_prob_interval_len(
+            frame_rate=frame_rate,
+            make_plot=False
+        )
+
+        len_pdf = lambda x: gamma.pdf(x, *len_pdf_params)
 
         test_dataset = MomentDataset(
             dataset_json_file=dataset,
@@ -187,7 +227,7 @@ if __name__ == "__main__":
             frame_rate=frame_rate
         )
 
-        predict(model, test_dataset, device, predictor_fn=predictor_fn)
+        predict(model, test_dataset, device, predictor_fn=predictor_fn, len_pdf=len_pdf)
     else:
         print(f"Predictions already exist at {bounds_out_fname}. Skipping prediction step.")
 
