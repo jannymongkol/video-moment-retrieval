@@ -311,3 +311,134 @@ class MomentBERT(nn.Module):
         elif self.prediction_head == 'in_out':
             in_logits = self.in_out_head(video_contextual).squeeze(-1)  # (B, N_frames)
             return in_logits
+
+
+class MomentBERTv2(nn.Module):
+    '''
+    Same as Moment BERT, but uses BERT's positional embeddings instead of learned ones.
+    Removes trailing [SEP] token.
+    '''
+    def __init__(
+        self, 
+        clip_dim=512, 
+        hidden_dim=768, 
+        max_video_len=384, 
+        bert_trainable=False, 
+        prediction_head='in_out', 
+        num_hidden=0, 
+        inner_dim=512
+    ):
+        super().__init__()
+        self.tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+        self.bert = BertModel.from_pretrained("bert-base-uncased")
+        
+        for param in self.bert.parameters():
+            param.requires_grad = bert_trainable
+
+        if num_hidden == 0:
+            self.video_proj = nn.Linear(clip_dim, hidden_dim)
+        else:
+            layers = []
+            start_size = clip_dim
+            for _ in range(num_hidden):
+                layers.append(nn.Linear(start_size, inner_dim))
+                layers.append(nn.ReLU())
+                start_size = inner_dim
+            layers.append(nn.Linear(inner_dim, hidden_dim))
+            self.video_proj = nn.Sequential(*layers)
+
+        if prediction_head == 'in_out':
+            self.in_out_head = nn.Linear(hidden_dim, 1)
+        
+        if prediction_head == 'start_end':
+            self.start_head = nn.Linear(hidden_dim, 1)
+            self.end_head = nn.Linear(hidden_dim, 1)
+        
+        self.prediction_head = prediction_head
+        self.max_video_len = max_video_len
+
+    def forward(self, queries, video_clip_embeddings):
+        """
+        Forward pass through the model.
+        
+        Args:
+            queries (List[str]): List of text queries.
+            video_clip_embeddings (torch.tensor): Video embeddings of shape (N_frames, Clip_dim).
+        
+        Returns:
+            if prediction_head == 'in_out':
+                in_logits (torch.tensor): Logits for in-out frame prediction.
+            if prediction_head == 'start_end':
+                start_logits (torch.tensor): Logits for start frame prediction.
+                end_logits (torch.tensor): Logits for end frame prediction.
+        """
+        B = len(queries)
+        N_frames, clip_dim = video_clip_embeddings.shape
+        video_clip_embeddings = video_clip_embeddings.unsqueeze(0).expand(B, N_frames, clip_dim)
+        device = video_clip_embeddings.device
+
+        # Tokenize queries
+        encodings = self.tokenizer(
+            queries,
+            padding=True,
+            truncation=True,
+            return_tensors="pt"
+        )
+        input_ids = encodings['input_ids'].to(device)        # (B, T)
+        attention_mask = encodings['attention_mask'].to(device)  # (B, T)
+        
+        text_embeds = self.bert.embeddings(input_ids=input_ids)  # (B, T, hidden_dim)
+        
+        T = text_embeds.shape[1]
+
+        # Project and position-encode video embeddings using BERT's positional embeddings
+        video_proj = self.video_proj(video_clip_embeddings)  # (B, N_frames, hidden_dim)
+        video_position_ids = torch.arange(T+1, T+1+N_frames, device=device).unsqueeze(0).expand(B, N_frames)
+        video_pos_embeds = self.bert.embeddings.position_embeddings(video_position_ids)
+        video_embeds = video_proj + video_pos_embeds  # (B, N_frames, hidden_dim)
+
+        # [SEP] token embedding
+        sep_token_id = 102  # [SEP] token ID in BERT
+        sep_token = self.bert.embeddings.word_embeddings(
+            torch.tensor(sep_token_id, device=device)
+        )
+        sep_token += self.bert.embeddings.position_embeddings(
+            torch.tensor(T, device=device)
+        )
+        sep_token = sep_token.expand(B, 1, -1)  # (B, 1, hidden_dim)
+
+        # Concatenate: [text] + [SEP] + [video]
+        full_input = torch.cat([text_embeds, sep_token, video_embeds], dim=1)  # (B, T + 1 + N_frames, hidden_dim)
+
+        # Attention mask
+        full_attention = torch.cat([
+            attention_mask,                           # (B, T)
+            torch.ones((B, 1), device=device),        # SEP
+            torch.ones((B, N_frames), device=device), # video
+        ], dim=1)
+
+        # Token type IDs
+        token_type_ids = torch.cat([
+            torch.zeros((B, input_ids.size(1)), device=device, dtype=torch.long),  # text
+            torch.zeros((B, 1), device=device, dtype=torch.long),                  # SEP
+            torch.ones((B, N_frames), device=device, dtype=torch.long),           # video
+        ], dim=1)
+
+        # Forward through BERT
+        outputs = self.bert(
+            inputs_embeds=full_input,
+            attention_mask=full_attention,
+            token_type_ids=token_type_ids
+        )
+        
+        contextual = outputs.last_hidden_state  # (B, T + 1 + N_frames, hidden_dim)
+        video_contextual = contextual[:, input_ids.size(1) + 1 :, :]  # (B, N_frames, hidden_dim)
+
+        if self.prediction_head == 'start_end':
+            start_logits = self.start_head(video_contextual).squeeze(-1)  # (B, N_frames)
+            end_logits = self.end_head(video_contextual).squeeze(-1)      # (B, N_frames)
+            return start_logits, end_logits
+
+        elif self.prediction_head == 'in_out':
+            in_logits = self.in_out_head(video_contextual).squeeze(-1)  # (B, N_frames)
+            return in_logits
