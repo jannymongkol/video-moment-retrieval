@@ -90,72 +90,6 @@ def train(model, dataset, loss_fn, optimizer, device, val_dataset=None):
     else:
         return avg_loss
 
-def predict(model, test_dataset, device, ious=[0.1, 0.3, 0.5, 0.7, 0.9], predictor_fn="argmax"):
-    """
-    Prediction loop for video moment retrieval.
-
-    model: MomentBERT
-    dataloader (MomentDataset): yields dict with tokenized text, video embeddings, labels
-    device: CUDA or CPU
-    """
-    model.eval()
-    predictions = {}
-    output = {}
-    
-    results = {}
-    total_sum_r1_iou = {iou: 0 for iou in ious}
-    total_queries = 0
-
-    with torch.no_grad():
-        for i,data in tqdm(enumerate(test_dataset)):
-            
-            key = data['video_id']
-            queries = data['sentences']
-            video_clip_embeddings = torch.from_numpy(data['embedding']).to(device)
-            
-            if video_clip_embeddings.shape[0] > model.max_video_len:
-                continue
-
-            result = model.forward(queries, video_clip_embeddings)
-            result = torch.sigmoid(result)
-            result = result.cpu().numpy()
-            
-            if predictor_fn == "argmax":
-                pred_clip_length = 8 * data['decode_fps'] # placeholder
-                max_framestamps = np.argmax(result, axis=1) # (batch_size, 1)
-                num_frames = result.shape[1]
-
-                lower_bound = np.maximum(0, max_framestamps - pred_clip_length//2)
-                upper_bound = np.minimum(num_frames, max_framestamps + pred_clip_length//2)
-                bounds = np.stack([lower_bound, upper_bound], axis=0).T # (2, batch_size)
-            elif predictor_fn == "kmeans":
-                # Use kmeans to find the regions
-                spans = kmeans_region_detection(result)
-                bounds = np.stack(spans, axis=1).T # (2, batch_size)
-            
-            output[key] = bounds.tolist()
-            predictions[key] = result.tolist()
-
-            gt_intervals = np.array(data['framestamps'])
-            pred_intervals = bounds
-            
-            total_queries += gt_intervals.shape[0]
-            for iou in ious:
-                total_sum_r1_iou[iou] += np.sum(r1_IoUm_sum(gt_intervals, pred_intervals, iou))
-            
-    for iou in ious:
-        total_sum_r1_iou[iou] /= total_queries
-        results[iou] = {
-            'R1 IoU': total_sum_r1_iou[iou],
-        }
-        print(f"R1 IoU@{iou}: {total_sum_r1_iou[iou]:.4f}")
-
-    with open(f"predictions_{predictor_fn}_iid.json", "w") as f:
-        # json.dump(output, f)
-        json.dump(predictions, f)
-        print(f"Predictions saved to predictions_{predictor_fn}.json")
-        
-    return results
 
 if __name__ == "__main__":
     # Setup device
@@ -234,8 +168,12 @@ if __name__ == "__main__":
         
     elif sys.argv[1] == "predict":
         # Load the best model
-        checkpoint = torch.load("frozen_bert_in_out/moment_bert_best.pt")
-        model = MomentBERT(num_hidden=0).to(device)
+        checkpoint_fname = sys.argv[2] if len(sys.argv) > 2 else "checkpoints/moment_bert_1_hid_stend_best.pt"
+        checkpoint = torch.load(checkpoint_fname)
+        model = MomentBERT(
+            num_hidden=1, 
+            prediction_head='start_end'
+        ).to(device)
         model.load_state_dict(checkpoint['model_state_dict'])
         
         # Create test dataset
@@ -253,7 +191,7 @@ if __name__ == "__main__":
         # )
         
         # Make predictions
-        predictions = predict(model, test_iid_dataset, device, predictor_fn="kmeans")
+        predictions = predict(model, test_iid_dataset, device, predictor_fn="argmax")
         
         # Save predictions to JSON file
         with open("bert_test_iid.json", "w") as f:
@@ -266,11 +204,11 @@ if __name__ == "__main__":
         #     json.dump(predictions, f)
 
     elif sys.argv[1] == "analyze":
-        pred_fname = sys.argv[2] if len(sys.argv) > 2 else "predictions_kmeans_ood.json"
-        source_fname = sys.argv[3] if len(sys.argv) > 3 else "data/Charades-CD/charades_test_ood.json"
+        pred_fname = sys.argv[2]
+        source_fname = sys.argv[3]
 
-        run_label = sys.argv[4] if len(sys.argv) > 4 else "baseline"
-        split_label = sys.argv[5] if len(sys.argv) > 4 else "iid"
+        run_label = sys.argv[4]
+        split_label = sys.argv[5]
 
         if run_label == "baseline":
             visualize_baseline(

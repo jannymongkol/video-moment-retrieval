@@ -44,7 +44,7 @@ def kmeans_region_detection(logits, n_clusters=2):
     
     return all_spans
 
-def visualize_intervals(true_interval, predicted_logits, predicted_interval, video_id, run_label, split_label, query_id):
+def visualize_intervals(true_interval, predicted_logits, predicted_interval, video_id, run_label, split_label, query_id, out_folder):
     # Create a figure
     plt.figure(figsize=(10, 5))
     
@@ -54,32 +54,47 @@ def visualize_intervals(true_interval, predicted_logits, predicted_interval, vid
 
     if predicted_interval is not None:
         plt.axvspan(predicted_interval[0], predicted_interval[1], color='orange', alpha=0.3, label='Predicted Interval')
-
-    
+    # print(predicted_logits)
     # Plot predicted intervals
-    plt.plot(predicted_logits, color='red', label='Predicted Probability')
+    if type(predicted_logits) == list:
+        for i, logits in enumerate(predicted_logits):
+            color = 'red' if i == 0 else 'blue'
+            label = 'Start' if i == 0 else 'End'
+            plt.plot(logits, color=color, label=f'Predicted Probability of {label}')
+    else:
+        plt.plot(predicted_logits, color='red', label='Predicted Probability')
     
     # Set title and labels
     plt.title(f'Video ID: {video_id}')
     plt.xlabel('Frame Index')
-    plt.ylim(0, 1)
+    # plt.ylim(0, 1)
     plt.ylabel('Predicted Probability')
     
     # Show legend
     plt.legend()
     
     # save the figure
-    if not os.path.exists(f"visualizations/{run_label}/{split_label}"):
-        os.makedirs(f"visualizations/{run_label}/{split_label}")
-    plt.savefig(f"visualizations/{run_label}/{split_label}/{video_id}_{query_id}.png")
+    plt.savefig(f"{out_folder}/{video_id}_{query_id}.png")
     plt.close()
     
-def visualize_random_subsamples(source, predictions, run_label, split_label, num_sample=5, frame_rate=16):
+def visualize_random_subsamples(
+    source, 
+    predictions, 
+    bounds_predictions,
+    run_label, 
+    split_label, 
+    num_sample=5, 
+    frame_rate=16,
+    out_folder="visualizations"
+):
     with open(source, 'r') as f:
         source_json = json.load(f)
 
     with open(predictions, 'r') as f:
         pred_json = json.load(f)
+    
+    with open(bounds_predictions, 'r') as f:
+        bounds_json = json.load(f)
 
     # get random keys
     keys = list(pred_json.keys())
@@ -98,18 +113,27 @@ def visualize_random_subsamples(source, predictions, run_label, split_label, num
             ]
 
         logits = np.array(pred_json[key])
+        bounds = bounds_json[key]
 
         for i, q in enumerate(queries):
             # get the true interval
             true_interval = framestamps[i]
 
             # get the predicted logits
-            predicted_logits = logits[i]
-            spans = kmeans_region_detection(predicted_logits.reshape(1, -1))[0]
+            if len(logits.shape) > 2:
+                # print(logits.shape)
+                predicted_logits = [logits[r, i, :] for r in range(logits.shape[0])]
+                # print([p.shape for p in predicted_logits])
+                max_interval_range = logits.shape[2]
+            else:
+                predicted_logits = logits[i]
+                max_interval_range = len(predicted_logits)
+            # spans = kmeans_region_detection(predicted_logits.reshape(1, -1))[0]
+            spans = bounds[i]
 
             true_interval = [
-                min(true_interval[0], len(predicted_logits) - 1),
-                min(true_interval[1], len(predicted_logits) - 1)
+                min(true_interval[0], max_interval_range - 1),
+                min(true_interval[1], max_interval_range - 1)
             ]
 
             # get the video id
@@ -118,13 +142,25 @@ def visualize_random_subsamples(source, predictions, run_label, split_label, num
             query_id = i
 
             # visualize the intervals
-            visualize_intervals(true_interval, predicted_logits, spans,
+            visualize_intervals(true_interval, 
+                                predicted_logits, 
+                                spans,
                                 video_id, 
                                 run_label, split_label,
-                                query_id)
+                                query_id,
+                                out_folder)
         
 
-def visualize_baseline(source, predictions, run_label, split_label, num_sample=5, frame_rate=16):
+def visualize_baseline(    
+    source, 
+    predictions, 
+    bounds_predictions,
+    run_label, 
+    split_label, 
+    num_sample=5, 
+    frame_rate=16,
+    out_folder="visualizations"
+):
     with open(source, 'r') as f:
         source_json = json.load(f)
 

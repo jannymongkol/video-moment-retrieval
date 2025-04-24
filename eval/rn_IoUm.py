@@ -30,7 +30,17 @@ def r1_IoUm(gt_interval_path, prediction_interval_path, min_IoU=0.5):
     
     return total_sum / total_queries
 
-def dr1_IoUm(gt_interval_path, prediction_interval_path, min_IoU=0.5):
+def dr1_IoUm_sum(gt_intervals, pred_intervals, num_frames, min_IoU=0.5):
+    r1_IoUm_res = r1_IoUm_sum(gt_intervals, pred_intervals, min_IoU)
+    
+    vid_size = max(num_frames, np.max(gt_intervals[:,1]))
+    alpha_s = np.abs(gt_intervals[:, 0] - pred_intervals[:, 0])/vid_size
+    alpha_e = np.abs(gt_intervals[:, 1] - pred_intervals[:, 1])/vid_size
+
+    sum_res = np.sum(r1_IoUm_res * (1 - alpha_s) * (1 - alpha_e))
+    return sum_res
+
+def dr1_IoUm(gt_interval_path, prediction_interval_path, num_frames, min_IoU=0.5, frame_rate=4):
     # Load both gt and pred as json files
     with open(gt_interval_path, 'r') as file:
         gt_data = json.load(file)
@@ -41,6 +51,7 @@ def dr1_IoUm(gt_interval_path, prediction_interval_path, min_IoU=0.5):
     total_sum = 0
     for vid_id in gt_data:
         gt_intervals = np.array(gt_data[vid_id]['framestamps'])
+        gt_intervals = gt_intervals // (16 // frame_rate)
         pred_intervals = np.array(pred_data[vid_id])
         
         total_queries += gt_intervals.shape[0]
