@@ -24,7 +24,7 @@ embedding_dir = "data/clip_video_feature_vector"
 # Model Info
 prediction_head = "in_out"
 predictor_fn = "brute_force"
-alpha = 0.7
+alpha = 0.5
 num_hidden = 0
 frame_rate = 4
 
@@ -35,7 +35,7 @@ dataset = f"data/Charades-CD/charades_test_{split}.json"
 is_baseline = False
 checkpoint_fname = "checkpoints/moment_bert_best.pt"
 model_nickname = "moment_bert"
-folder = "moment_bert/brute_force_ave_0.7_len"
+folder = "moment_bert/brute_force_ave_0.5_proportion"
 if not os.path.exists(folder):
     os.makedirs(folder)
 
