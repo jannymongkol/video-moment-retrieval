@@ -29,7 +29,7 @@ num_hidden = 0
 frame_rate = 4
 
 # Run info
-split = "ood"
+split = "iid"
 dataset = f"data/Charades-CD/charades_test_{split}.json"
 
 is_baseline = False

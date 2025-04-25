@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 
-def kmeans_region_detection(logits, n_clusters=2):
+def kmeans_region_detection(logits, n_clusters=3):
     # Handle batched input: logits shape is (batch_size, len)
     batch_size = logits.shape[0]
     all_spans = []
@@ -65,7 +65,8 @@ def visualize_intervals(true_interval, predicted_logits, predicted_interval, vid
         plt.plot(predicted_logits, color='red', label='Predicted Probability')
     
     # Set title and labels
-    plt.title(f'Video ID: {video_id}')
+    # plt.title(f'Video ID: {video_id}')
+    plt.title("Weighted Probability Method")
     plt.xlabel('Frame Index')
     # plt.ylim(0, 1)
     plt.ylabel('Predicted Probability')
@@ -98,8 +99,8 @@ def visualize_random_subsamples(
 
     # get random keys
     keys = list(pred_json.keys())
-    random_keys = np.random.choice(keys, num_sample, replace=False)
-    for key in random_keys:
+    # random_keys = np.random.choice(keys, num_sample, replace=False)
+    for key in ['DO48Z']:
         queries = source_json[key]['sentences']
         framestamps = source_json[key]['framestamps']
         if frame_rate < 16:
